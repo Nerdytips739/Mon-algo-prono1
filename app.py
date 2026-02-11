@@ -286,4 +286,9 @@ def home():
 
 @app.route('/analyze', methods=['POST'])
 def analyze_endpoint():
-    data
+    data = request.json
+    # Renvoie directement le JSON stringifié
+    return jsonify({"analysis": get_ai_prediction(data.get('match', ''))})
+
+if __name__ == '__main__':
+    app.run(debug=True)
