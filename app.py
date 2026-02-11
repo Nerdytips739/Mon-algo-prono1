@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import traceback
 from flask import Flask, request, jsonify, render_template_string
 import google.generativeai as genai
 
@@ -11,86 +12,101 @@ api_key = os.environ.get("GOOGLE_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- PROMPT STRICT (JSON ONLY) ---
+# --- PROMPT STRICT ---
 SYSTEM_PROMPT = """
-Tu es un API de prédiction sportive. 
-Ton rôle est de convertir une demande de match en un objet JSON strict.
-Ne mets JAMAIS de Markdown (pas de ```json).
-Ne mets JAMAIS de phrase d'intro.
-Renvoie JUSTE l'objet JSON brut.
+Tu es NT-ALGO v4. 
+Tu dois analyser le match et répondre UNIQUEMENT par un JSON.
+Sois critique. Si une équipe a des blessés majeurs, baisse son Trust Score.
 
-Structure OBLIGATOIRE :
+Structure JSON OBLIGATOIRE (Respecte les clés exactes) :
 {
-    "match_info": "Equipe A vs Equipe B",
-    "stats_context": {
-        "absences": "Liste courte des absents majeurs",
-        "xg_analysis": "Analyse rapide des xG récents",
-        "form": "Comparaison de forme (ex: A est invaincu...)"
+    "match_title": "Equipe A vs Equipe B",
+    "context": {
+        "absences": "Lister les absents majeurs ou 'Aucun'",
+        "xg_data": "Comparer les xG récents ou 'N/A'",
+        "form": "Analyse forme (5 derniers matchs)"
     },
     "predictions": [
         {
-            "type": "Vainqueur",
+            "market": "Vainqueur",
             "selection": "Nom Equipe",
-            "probability": "XX%",
-            "trust_score": 8,
-            "reasoning": "Explication courte."
+            "proba": "XX%",
+            "trust": 8,
+            "analysis": "Pourquoi ce choix."
         },
         {
-            "type": "Buts",
+            "market": "Buts",
             "selection": "Over/Under",
-            "probability": "XX%",
-            "trust_score": 7,
-            "reasoning": "Explication courte."
+            "proba": "XX%",
+            "trust": 7,
+            "analysis": "Pourquoi ce choix."
         },
         {
-            "type": "BTTS",
+            "market": "BTTS",
             "selection": "Oui/Non",
-            "probability": "XX%",
-            "trust_score": 6,
-            "reasoning": "Explication courte."
+            "proba": "XX%",
+            "trust": 6,
+            "analysis": "Pourquoi ce choix."
         }
     ],
     "banker": {
         "selection": "Le pari le plus sûr",
-        "odds": "1.50",
-        "analysis": "Pourquoi c'est sûr."
+        "odds": "1.xx",
+        "reason": "Argument clé."
     }
 }
 """
+
+def clean_json(text):
+    """Fonction de nettoyage agressive pour trouver le JSON"""
+    try:
+        # On cherche le bloc entre { et }
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return match.group(0)
+        return text
+    except:
+        return text
+
+def ensure_structure(data):
+    """Vérifie que toutes les clés existent pour éviter le crash JS"""
+    if "context" not in data:
+        data["context"] = {"absences": "Non spécifié", "xg_data": "N/A", "form": "N/A"}
+    if "predictions" not in data:
+        data["predictions"] = []
+    if "banker" not in data:
+        data["banker"] = {"selection": "N/A", "odds": "-", "reason": "Données insuffisantes"}
+    if "match_title" not in data:
+        data["match_title"] = "Match Inconnu"
+    return data
 
 def get_ai_prediction(match_name):
     if not api_key:
         return json.dumps({"error": "Clé API manquante"})
     
     try:
-        # On utilise Flash Latest (Rapide)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # On utilise le modèle Pro (plus stable pour le JSON que Flash)
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         
         response = model.generate_content(
-            f"{SYSTEM_PROMPT}\n\nMATCH: {match_name}"
+            f"{SYSTEM_PROMPT}\n\nANALYSE LE MATCH : {match_name}",
+            generation_config={"response_mime_type": "application/json"} # Force le mode JSON natif de Google
         )
         
-        # --- FILTRE DE NETTOYAGE (LE CORRECTIF) ---
-        # On cherche le premier '{' et le dernier '}' pour isoler le JSON
-        text = response.text
-        match = re.search(r'\{.*\}', text, re.DOTALL)
+        raw_text = response.text
+        json_text = clean_json(raw_text)
         
-        if match:
-            json_str = match.group(0)
-            # On vérifie si c'est du JSON valide
-            json.loads(json_str) 
-            return json_str
-        else:
-            # Si l'IA n'a pas renvoyé de JSON, on force une structure d'erreur
-            return json.dumps({
-                "match_info": "Erreur IA",
-                "stats_context": {"absences": "N/A", "xg_analysis": "N/A", "form": "N/A"},
-                "predictions": [],
-                "banker": {"selection": "Erreur", "odds": "0", "analysis": "L'IA a mal répondu."}
-            })
+        # Parsing
+        data = json.loads(json_text)
+        
+        # Sécurisation des données
+        data = ensure_structure(data)
+        
+        return json.dumps(data)
 
     except Exception as e:
-        return json.dumps({"error": f"Erreur technique : {str(e)}"})
+        print(f"ERREUR BACKEND : {traceback.format_exc()}")
+        return json.dumps({"error": f"Erreur IA : {str(e)}"})
 
 # --- INTERFACE ---
 @app.route('/')
@@ -101,49 +117,65 @@ def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NT-PRO FIXED</title>
+    <title>NT-ALGO v4</title>
     <style>
-        body { font-family: sans-serif; background: #0f172a; color: white; padding: 20px; margin: 0; }
+        :root { --bg: #0b1120; --card: #1e293b; --accent: #38bdf8; --text: #e2e8f0; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; padding: 20px; margin: 0; }
         .container { max-width: 600px; margin: 0 auto; }
-        input { width: 100%; padding: 15px; background: #1e293b; border: 1px solid #334155; color: white; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box; }
-        button { width: 100%; padding: 15px; background: #38bdf8; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
         
-        .card { background: #1e293b; padding: 15px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #334155; }
-        .tag { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; display: block; margin-bottom: 5px; }
-        .value { font-size: 1rem; color: #e2e8f0; }
+        /* INPUT */
+        .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
+        input { flex: 1; padding: 15px; border-radius: 10px; border: 1px solid #334155; background: var(--card); color: white; }
+        button { padding: 15px 25px; background: var(--accent); border: none; border-radius: 10px; font-weight: bold; cursor: pointer; color: #0f172a; }
         
-        .bar-bg { background: #334155; height: 6px; border-radius: 3px; margin-top: 5px; }
-        .bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+        /* CARDS */
+        .card { background: var(--card); padding: 20px; border-radius: 16px; margin-bottom: 15px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .card-header { font-size: 0.8rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; letter-spacing: 1px; }
+        .highlight { color: var(--accent); font-weight: bold; }
         
-        #error-msg { color: #ef4444; background: rgba(239,68,68,0.1); padding: 10px; border-radius: 8px; display: none; margin-top: 20px; }
+        /* TRUST BAR */
+        .trust-track { background: #334155; height: 6px; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+        .trust-bar { height: 100%; transition: width 0.5s ease; }
+        
+        /* BANKER */
+        .banker-box { border: 1px solid #22c55e; background: linear-gradient(180deg, rgba(34,197,94,0.1) 0%, rgba(0,0,0,0) 100%); }
+        .banker-tag { background: #22c55e; color: black; font-size: 0.7rem; padding: 3px 8px; border-radius: 4px; font-weight: bold; display: inline-block; margin-bottom: 5px; }
+
+        #error-zone { color: #ef4444; background: rgba(239,68,68,0.1); padding: 15px; border-radius: 10px; margin-top: 20px; display: none; }
+        #loader { text-align: center; display: none; margin-top: 20px; font-style: italic; color: #64748b; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1 style="text-align:center; color:#38bdf8;">NT-PRO v3</h1>
-        <input type="text" id="matchInput" placeholder="Ex: Real vs Barca">
-        <button onclick="run()">ANALYSER</button>
-        
-        <div id="loading" style="display:none; text-align:center; margin-top:20px;">🔄 Analyse des données en cours...</div>
-        <div id="error-msg"></div>
 
-        <div id="result" style="display:none; margin-top:20px;">
-            <h2 id="match-title" style="text-align:center;"></h2>
-            
+    <div class="container">
+        <h1 style="text-align:center; margin-bottom: 5px;">🧠 NT-ALGO <span style="color:var(--accent)">v4</span></h1>
+        <p style="text-align:center; color:#64748b; font-size:0.9rem; margin-bottom:30px;">Algorithme Prédictif Autonome</p>
+
+        <div class="search-box">
+            <input type="text" id="matchInput" placeholder="Ex: Real Madrid vs Man City">
+            <button onclick="run()">SCAN</button>
+        </div>
+
+        <div id="loader">📡 Initialisation du réseau de neurones...</div>
+        <div id="error-zone"></div>
+
+        <div id="results" style="display:none;">
+            <h2 id="match-title" style="text-align:center; margin-bottom:20px;"></h2>
+
             <div class="card">
-                <span class="tag">🚑 Absences</span>
-                <div class="value" id="absences"></div>
-                <hr style="border-color:#334155; opacity:0.3; margin:10px 0;">
-                <span class="tag">📊 xG & Forme</span>
-                <div class="value" id="form"></div>
+                <div class="card-header">🚑 EFFECTIFS & ABSENCES</div>
+                <div id="ctx-absences" style="margin-bottom:10px;"></div>
+                <div class="card-header">📊 DATA xG</div>
+                <div id="ctx-xg"></div>
             </div>
 
-            <div id="pronos-list"></div>
+            <div id="predictions-list"></div>
 
-            <div class="card" style="border: 1px solid #22c55e;">
-                <span class="tag" style="color:#22c55e;">💎 LE BANKER</span>
-                <div class="value" style="font-size:1.2rem; font-weight:bold;" id="banker-sel"></div>
-                <div class="tag" style="margin-top:5px;">Analyse : <span id="banker-ana" style="color:#ccc; text-transform:none;"></span></div>
+            <div class="card banker-box">
+                <span class="banker-tag">💎 LE BANKER</span>
+                <div id="banker-sel" style="font-size:1.3rem; font-weight:800; margin: 5px 0;"></div>
+                <div style="font-size:0.9rem; color:#cbd5e1;">Cote estimée : <span id="banker-odds" class="highlight"></span></div>
+                <p id="banker-reason" style="font-size:0.9rem; margin-top:10px; color:#94a3b8;"></p>
             </div>
         </div>
     </div>
@@ -151,11 +183,12 @@ def home():
     <script>
         async function run() {
             const input = document.getElementById('matchInput').value;
-            if(!input) return;
+            if(!input) return alert("Entre un match !");
 
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('result').style.display = 'none';
-            document.getElementById('error-msg').style.display = 'none';
+            // Reset UI
+            document.getElementById('loader').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error-zone').style.display = 'none';
 
             try {
                 const res = await fetch('/analyze', {
@@ -163,50 +196,72 @@ def home():
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({match: input})
                 });
+
+                const jsonResponse = await res.json();
+
+                // Gestion erreur interne Python
+                if(jsonResponse.error) {
+                    throw new Error(jsonResponse.error);
+                }
+
+                // Parsing des données
+                let data;
+                if (typeof jsonResponse.analysis === 'string') {
+                    data = JSON.parse(jsonResponse.analysis);
+                } else {
+                    data = jsonResponse; // Cas où c'est déjà un objet
+                }
+
+                // --- REMPLISSAGE SÉCURISÉ (Le fameux correctif) ---
+                // On utilise ?. (Optional Chaining) pour éviter les crashs si une donnée manque
                 
-                const rawData = await res.json();
+                document.getElementById('match-title').innerText = data.match_title || "Match Analysé";
                 
-                // Si le serveur renvoie une erreur directe
-                if(rawData.error) throw new Error(rawData.error);
+                // Contexte
+                document.getElementById('ctx-absences').innerText = data.context?.absences || "Données non disponibles";
+                document.getElementById('ctx-xg').innerText = data.context?.xg_data || "Données non disponibles";
 
-                // Parsing du JSON nettoyé par Python
-                let data = JSON.parse(rawData.analysis);
-
-                // Remplissage
-                document.getElementById('match-title').innerText = data.match_info;
-                document.getElementById('absences').innerText = data.stats_context.absences;
-                document.getElementById('form').innerText = data.stats_context.xg_analysis + " " + data.stats_context.form;
-
-                // Liste des pronos
-                const list = document.getElementById('pronos-list');
+                // Prédictions
+                const list = document.getElementById('predictions-list');
                 list.innerHTML = "";
-                data.predictions.forEach(p => {
-                    let color = p.trust_score > 7 ? '#22c55e' : (p.trust_score > 4 ? '#eab308' : '#ef4444');
+                
+                const preds = data.predictions || [];
+                preds.forEach(p => {
+                    // Calcul couleur
+                    let color = '#ef4444'; // Rouge
+                    if(p.trust >= 5) color = '#eab308'; // Jaune
+                    if(p.trust >= 8) color = '#22c55e'; // Vert
+
                     list.innerHTML += `
                         <div class="card">
-                            <div style="display:flex; justify-content:space-between;">
-                                <span class="tag">${p.type}</span>
-                                <span class="tag">Trust: ${p.trust_score}/10</span>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                <span class="card-header">${p.market}</span>
+                                <span style="font-size:0.8rem; font-weight:bold; color:${color}">TRUST ${p.trust}/10</span>
                             </div>
-                            <div style="font-size:1.1rem; font-weight:bold;">${p.selection}</div>
-                            <div class="bar-bg"><div class="bar-fill" style="width:${p.trust_score*10}%; background:${color};"></div></div>
-                            <div style="font-size:0.9rem; color:#ccc; margin-top:8px;">💡 ${p.reasoning}</div>
+                            <div style="font-size:1.2rem; font-weight:bold;">${p.selection}</div>
+                            <div class="trust-track">
+                                <div class="trust-bar" style="width:${p.trust * 10}%; background:${color};"></div>
+                            </div>
+                            <div style="font-size:0.9rem; color:#94a3b8; margin-top:10px;">💡 ${p.analysis}</div>
                         </div>
                     `;
                 });
 
                 // Banker
-                document.getElementById('banker-sel').innerText = data.banker.selection;
-                document.getElementById('banker-ana').innerText = data.banker.analysis;
+                const banker = data.banker || {};
+                document.getElementById('banker-sel').innerText = banker.selection || "N/A";
+                document.getElementById('banker-odds').innerText = banker.odds || "-";
+                document.getElementById('banker-reason').innerText = banker.reason || "Pas d'analyse";
 
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('result').style.display = 'block';
+                // Affichage final
+                document.getElementById('loader').style.display = 'none';
+                document.getElementById('results').style.display = 'block';
 
             } catch (e) {
-                document.getElementById('loading').style.display = 'none';
-                const errDiv = document.getElementById('error-msg');
+                document.getElementById('loader').style.display = 'none';
+                const errDiv = document.getElementById('error-zone');
                 errDiv.style.display = 'block';
-                errDiv.innerText = "Erreur : " + e.message + " (Réessaie, l'IA a bégayé)";
+                errDiv.innerText = "❌ ERREUR : " + e.message;
             }
         }
     </script>
@@ -217,6 +272,7 @@ def home():
 @app.route('/analyze', methods=['POST'])
 def analyze_endpoint():
     data = request.json
+    # On renvoie directement le JSON stringifié par la fonction get_ai_prediction
     return jsonify({"analysis": get_ai_prediction(data.get('match', ''))})
 
 if __name__ == '__main__':
