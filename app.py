@@ -39,7 +39,7 @@ def get_ai_prediction(match_name):
         return "Erreur : Clé API Google manquante."
     try:
         # On utilise le modèle Flash (Rapide et Gratuit)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         full_prompt = f"{SYSTEM_PROMPT}\n\nAnalyse ce match maintenant : {match_name}"
         
@@ -104,3 +104,4 @@ def analyze_endpoint():
 if __name__ == '__main__':
 
     app.run(debug=True)
+
