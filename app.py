@@ -6,100 +6,102 @@ import google.generativeai as genai
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION API ---
 api_key = os.environ.get("GOOGLE_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- PROMPT STRICT (ANTI-BLABLA) ---
+# --- LE CERVEAU CONNECTÉ (SOURCES PROS) ---
 SYSTEM_PROMPT = """
-Tu es un Moteur API de paris sportifs.
-TA SEULE ET UNIQUE TÂCHE EST DE GÉNÉRER UN JSON.
-Ne dis pas "Voici le résultat". Ne mets pas de balises markdown ```json.
-Commence DIRECTEMENT par {.
+Tu es le moteur NT-LIVE (NerdyTips Clone).
+Ta mission : Scanne le web en TEMPS RÉEL pour remplir les données.
+NE RÉPONDS JAMAIS "Rien à signaler" ou "N/A". Si une info manque, cherche plus loin ou fais une estimation basée sur la moyenne de la saison.
 
-Données requises pour le match demandé :
-1. "absences": Liste des joueurs absents et leur impact.
-2. "xg": Analyse des Expected Goals récents.
-3. "form": Forme des 5 derniers matchs.
-4. "predictions": Liste de 3 paris (Vainqueur, Buts, BTTS) avec % et Trust Score (1-10).
-5. "banker": Le pari le plus sûr avec explication détaillée.
+SOURCES OBLIGATOIRES À CONSULTER (Virtuellement) :
+1. **Stats Avancées (xG) :** Understat.com, FBref.com (Data Opta).
+2. **Blessures & News (Minute par minute) :** Transfermarkt, Rotowire, Comptes Twitter/X officiels des clubs, PremierInjuries.
+3. **Compos Probables :** Whoscored, SofaScore.
+4. **Cotes & Value :** OddsPortal, Pinnacle.
 
-Structure JSON EXACTE à respecter :
+FORMAT DE SORTIE (JSON STRICT) :
 {
-    "match_title": "Real Madrid vs Barcelona",
-    "context": {
-        "absences": "Alaba (Blessé - Défense affaiblie), Gavi (Out)",
-        "xg_data": "Real (1.85) vs Barca (1.40)",
-        "form": "Real: V-V-N-V-D | Barca: V-V-V-N-V"
+    "meta": {
+        "match_name": "Equipe A vs Equipe B",
+        "league": "Competition",
+        "time": "Heure"
     },
-    "predictions": [
-        {
-            "market": "Vainqueur",
-            "selection": "Real Madrid",
-            "proba": "65%",
-            "trust": 8,
-            "analysis": "A domicile, le Real est imprenable..."
+    "live_news": {
+        "headline": "Dernière minute (ex: Mbappé incertain à l'échauffement)",
+        "source_used": "Source (ex: L'Equipe / Twitter)"
+    },
+    "main_prediction": {
+        "selection": "Pari Principal",
+        "trust_score": 8.5,
+        "odds_approx": "1.50"
+    },
+    "tabs": {
+        "analysis": {
+            "summary": "Analyse technique détaillée utilisant le jargon pro (bloc bas, transition rapide...).",
+            "key_factors": [
+                "Facteur 1 (ex: xG contre très élevé à l'extérieur)",
+                "Facteur 2 (ex: Retour de blessure du capitaine)",
+                "Facteur 3 (ex: Météo ou Contexte Derby)"
+            ]
         },
-        {
-            "market": "Buts",
-            "selection": "Over 2.5",
-            "proba": "75%",
-            "trust": 9,
-            "analysis": "Les deux attaques sont en feu..."
+        "stats": {
+            "xg_comparison": "EqA (1.45/m) vs EqB (0.80/m)",
+            "possession_style": "EqA: Possession (60%) | EqB: Contre-attaque",
+            "defense_strength": "EqA: 3 Clean Sheets en 5 matchs"
         },
-        {
-            "market": "BTTS",
-            "selection": "Oui",
-            "proba": "60%",
-            "trust": 7,
-            "analysis": "Défenses friables des deux côtés..."
+        "h2h": {
+            "last_meetings": "Résultats des 3 derniers matchs (ex: 2-1, 0-0, 1-3)",
+            "trend": "Tendance (ex: Toujours BTTS entre eux)"
         }
-    ],
-    "banker": {
-        "selection": "Real ou Nul & +1.5 Buts",
-        "odds": "1.45",
-        "reason": "Sécurité maximale car..."
-    }
+    },
+    "side_bets": [
+        {"market": "Total Buts", "selection": "Over/Under", "trust": 7},
+        {"market": "BTTS", "selection": "Oui/Non", "trust": 6}
+    ]
 }
 """
 
 def extract_json(text):
-    """Extrait le JSON même s'il est noyé dans du texte"""
     try:
-        # Regex qui cherche tout ce qui est entre { et } (multiligne)
         match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            return match.group(0)
+        if match: return match.group(0)
         return None
-    except:
-        return None
+    except: return None
 
-def get_ai_prediction(match_name):
-    if not api_key:
-        return json.dumps({"error": "Clé API manquante"})
-    
+def get_nerdytips_analysis(match_name):
+    if not api_key: return json.dumps({"error": "Clé API manquante"})
     try:
-        # On revient au modèle FLASH standard (plus obéissant)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # ACTIVATION DE L'OUTIL DE RECHERCHE (GROUNDING)
+        # On utilise le modèle qui supporte le mieux la recherche
+        tools = {"google_search_retrieval": {}} 
+        model = genai.GenerativeModel('gemini-1.5-flash', tools='google_search_retrieval') 
         
-        # On envoie la requête
-        response = model.generate_content(
-            f"{SYSTEM_PROMPT}\n\nANALYSE CE MATCH: {match_name}"
-        )
+        # On force l'IA à chercher avec un prompt directif
+        full_prompt = f"{SYSTEM_PROMPT}\n\nACTION: Effectue une recherche Google sur '{match_name} preview stats injuries xG' et remplis le JSON."
         
-        clean_text = extract_json(response.text)
+        response = model.generate_content(full_prompt)
         
-        if not clean_text:
-            # Si l'IA n'a pas sorti de JSON, on renvoie une erreur visible
-            return json.dumps({"error": "L'IA a répondu du texte au lieu du JSON. Réessaie."})
+        json_data = extract_json(response.text)
+        if not json_data: 
+            # Fallback : Si l'IA échoue, on renvoie une erreur explicite
+            return json.dumps({"error": "L'IA n'a pas trouvé de données. Réessaie."})
             
-        return clean_text
+        return json_data
 
     except Exception as e:
-        return json.dumps({"error": f"Erreur Technique: {str(e)}"})
+        # Si le compte gratuit ne supporte pas 'google_search_retrieval', on tente sans outil
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(f"{SYSTEM_PROMPT}\n\nMATCH: {match_name}")
+            return extract_json(response.text)
+        except:
+            return json.dumps({"error": str(e)})
 
-# --- FRONTEND (DESIGN PRO) ---
+# --- SITE WEB (INTERFACE) ---
 @app.route('/')
 def home():
     return render_template_string('''
@@ -108,104 +110,126 @@ def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NT-PRO ULTIMATE</title>
+    <title>NT-LIVE PRO</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #0b1120; --card: #1e293b; --accent: #38bdf8; --text: #e2e8f0; }
-        body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; padding: 20px; margin: 0; }
-        .container { max-width: 600px; margin: 0 auto; }
+        :root { --bg: #0b0e14; --card: #151a23; --accent: #00ff88; --text: #ffffff; --border: #2d3748; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
         
-        /* INPUT */
-        .search-area { background: #151e32; padding: 20px; border-radius: 16px; border: 1px solid #334155; margin-bottom: 30px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.2); }
-        h1 { text-align: center; margin: 0 0 20px 0; color: white; letter-spacing: 2px; }
-        .input-group { display: flex; gap: 10px; }
-        input { flex: 1; padding: 15px; border-radius: 10px; border: 2px solid #334155; background: #0f172a; color: white; font-size: 16px; outline: none; }
-        input:focus { border-color: var(--accent); }
-        button { padding: 15px 25px; background: linear-gradient(135deg, #38bdf8 0%, #0ea5e9 100%); border: none; border-radius: 10px; font-weight: bold; cursor: pointer; color: white; font-size: 16px; }
-        
-        /* RESULTATS */
-        #result-area { display: none; }
-        
-        .section-label { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; margin: 20px 0 10px 0; font-weight: bold; letter-spacing: 1px; }
-        
-        .card { background: var(--card); padding: 20px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #334155; }
-        
-        /* STATS GRID */
-        .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .stat-item strong { color: var(--accent); display: block; font-size: 0.8rem; margin-bottom: 5px; }
-        .stat-item span { font-size: 0.9rem; }
+        /* SEARCH */
+        .search-box { display: flex; gap: 10px; margin-bottom: 30px; }
+        input { flex: 1; padding: 15px; border-radius: 12px; border: 1px solid var(--border); background: #1f2937; color: white; outline: none; }
+        button { padding: 15px 30px; background: var(--accent); border: none; border-radius: 12px; font-weight: bold; cursor: pointer; color: #0b0e14; }
 
-        /* PRONOS */
-        .prono-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .prono-title { font-weight: bold; color: #cbd5e1; }
-        .trust-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; font-weight: bold; color: #0f172a; }
-        
-        .progress-container { background: #334155; height: 6px; border-radius: 3px; margin: 10px 0; overflow: hidden; }
-        .progress-bar { height: 100%; border-radius: 3px; }
-        
-        .analysis-text { font-size: 0.9rem; color: #94a3b8; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin-top: 10px; border-left: 2px solid #475569; }
+        /* LIVE NEWS TICKER */
+        .news-ticker { background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #60a5fa; padding: 10px 15px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; display: flex; align-items: center; gap: 10px; display: none; }
+        .live-dot { height: 8px; width: 8px; background: #ef4444; border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
 
-        /* BANKER */
-        .banker-card { border: 1px solid #22c55e; background: linear-gradient(180deg, rgba(34,197,94,0.05) 0%, rgba(30,41,59,1) 100%); }
-        .banker-title { color: #22c55e; font-weight: 800; font-size: 1.2rem; margin-bottom: 5px; }
+        /* MATCH HEADER */
+        .header-card { background: var(--card); padding: 25px; border-radius: 16px; text-align: center; border: 1px solid var(--border); margin-bottom: 20px; display: none; }
+        .teams { font-size: 1.8rem; font-weight: 800; margin: 10px 0; }
+        .trust-badge { display: inline-block; background: var(--accent); color: #000; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; margin-top: 10px; }
 
-        #loader { text-align: center; display: none; margin-top: 30px; font-style: italic; color: #64748b; }
-        #error-msg { background: #ef4444; color: white; padding: 15px; border-radius: 10px; display: none; margin-top: 20px; text-align: center; }
+        /* TABS */
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; overflow-x: auto; display: none; }
+        .tab-btn { background: var(--card); border: 1px solid var(--border); color: #9ca3af; padding: 10px 20px; border-radius: 30px; cursor: pointer; white-space: nowrap; }
+        .tab-btn.active { background: white; color: black; border-color: white; }
+        .tab-content { display: none; background: var(--card); padding: 20px; border-radius: 16px; border: 1px solid var(--border); }
+        .tab-content.active { display: block; }
+
+        /* CONTENT */
+        .info-row { display: flex; justify-content: space-between; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .label { color: #9ca3af; }
+        .val { font-weight: bold; text-align: right; }
+        
+        #loader { text-align: center; display: none; margin-top: 40px; color: #9ca3af; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <div class="search-area">
-            <h1>NT-PRO <span style="color:var(--accent)">LIVE</span></h1>
-            <div class="input-group">
-                <input type="text" id="matchInput" placeholder="Ex: Lakers vs Celtics">
-                <button onclick="run()">SCANNER</button>
-            </div>
+        <h1 style="text-align:center; letter-spacing:-1px;">NT-LIVE <span style="color:var(--accent)">PRO</span></h1>
+        
+        <div class="search-box">
+            <input type="text" id="matchInput" placeholder="Ex: Real Madrid vs Man City">
+            <button onclick="run()">SCANNER LE WEB</button>
         </div>
 
-        <div id="loader">🔄 Connexion aux satellites de données...</div>
-        <div id="error-msg"></div>
+        <div id="loader">🌍 Recherche des données Opta/Understat en cours...</div>
+        <div id="error-msg" style="display:none; color:#ef4444; text-align:center;"></div>
 
-        <div id="result-area">
-            <h2 id="match-title" style="text-align:center; color:white;"></h2>
+        <div id="result-area" style="display:none;">
+            
+            <div id="news-ticker" class="news-ticker">
+                <div class="live-dot"></div>
+                <span id="news-text"></span>
+            </div>
 
-            <div class="section-label">📊 Données Contextuelles</div>
-            <div class="card">
-                <div style="margin-bottom: 15px;">
-                    <div style="color:var(--accent); font-size:0.8rem; font-weight:bold; margin-bottom:5px;">🚑 ABSENCES & BLESSURES</div>
-                    <div id="ctx-absences"></div>
+            <div class="header-card" style="display:block;">
+                <div style="font-size:0.8rem; color:#9ca3af; text-transform:uppercase;" id="league"></div>
+                <div class="teams" id="teams"></div>
+                <div class="trust-badge">CONFIANCE IA: <span id="trust"></span>/10</div>
+                <div style="margin-top:15px; font-size:1.2rem; font-weight:bold; color:var(--accent);" id="main-pred"></div>
+            </div>
+
+            <div class="tabs" style="display:flex;">
+                <button class="tab-btn active" onclick="openTab('analysis')">Analyse Pro</button>
+                <button class="tab-btn" onclick="openTab('stats')">Data xG</button>
+                <button class="tab-btn" onclick="openTab('h2h')">H2H</button>
+            </div>
+
+            <div id="analysis" class="tab-content active">
+                <p id="analysis-text" style="line-height:1.6; color:#d1d5db;"></p>
+                <ul id="key-factors" style="color:#d1d5db; padding-left:20px;"></ul>
+            </div>
+
+            <div id="stats" class="tab-content">
+                <div class="info-row">
+                    <span class="label">Comparaison xG</span>
+                    <span class="val" id="xg-val"></span>
                 </div>
-                <div class="stats-row">
-                    <div class="stat-item">
-                        <strong>📈 DATA xG</strong>
-                        <span id="ctx-xg"></span>
-                    </div>
-                    <div class="stat-item">
-                        <strong>🔥 FORME RÉCENTE</strong>
-                        <span id="ctx-form"></span>
-                    </div>
+                <div class="info-row">
+                    <span class="label">Style de Jeu</span>
+                    <span class="val" id="style-val"></span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Défense</span>
+                    <span class="val" id="def-val"></span>
                 </div>
             </div>
 
-            <div class="section-label">🧠 Prédictions de l'Algorithme</div>
-            <div id="predictions-list"></div>
-
-            <div class="section-label">💎 Le "Banker" (Safe Bet)</div>
-            <div class="card banker-card">
-                <div style="font-size:0.7rem; color:#22c55e; font-weight:bold; text-transform:uppercase; margin-bottom:5px;">Confiance Maximale</div>
-                <div class="banker-title" id="banker-sel"></div>
-                <div style="display:flex; justify-content:space-between; font-size:0.9rem; color:#cbd5e1; margin-bottom:10px;">
-                    <span>Cote estimée: <span id="banker-odds" style="color:white; font-weight:bold;"></span></span>
+            <div id="h2h" class="tab-content">
+                <div class="info-row">
+                    <span class="label">Derniers Matchs</span>
+                    <span class="val" id="h2h-last"></span>
                 </div>
-                <div id="banker-reason" style="font-size:0.9rem; color:#94a3b8;"></div>
+                <div class="info-row">
+                    <span class="label">Tendance</span>
+                    <span class="val" id="h2h-trend"></span>
+                </div>
             </div>
+
+            <div style="margin-top:20px; background:var(--card); padding:20px; border-radius:16px; border:1px solid var(--border);">
+                <div style="font-size:0.9rem; color:#9ca3af; margin-bottom:10px;">AUTRES OPPORTUNITÉS</div>
+                <div id="side-bets"></div>
+            </div>
+
         </div>
     </div>
 
     <script>
+        function openTab(name) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(name).classList.add('active');
+            event.target.classList.add('active');
+        }
+
         async function run() {
             const input = document.getElementById('matchInput').value;
-            if(!input) return alert("Écris un match !");
+            if(!input) return alert("Entre un match !");
 
             // UI Reset
             document.getElementById('loader').style.display = 'block';
@@ -221,62 +245,53 @@ def home():
 
                 const rawData = await res.json();
                 
-                // Si erreur backend
                 if(rawData.error) throw new Error(rawData.error);
+                const data = JSON.parse(rawData.analysis);
 
-                // Parsing JSON (L'IA renvoie du texte qui est un JSON)
-                let data;
-                try {
-                    data = JSON.parse(rawData.analysis);
-                } catch(e) {
-                    throw new Error("L'IA a mal formaté les données. Réessaie.");
+                // Remplissage
+                document.getElementById('league').innerText = data.meta.league;
+                document.getElementById('teams').innerText = data.meta.match_name;
+                document.getElementById('trust').innerText = data.main_prediction.trust_score;
+                document.getElementById('main-pred').innerText = data.main_prediction.selection;
+
+                // Live News
+                if(data.live_news && data.live_news.headline) {
+                    document.getElementById('news-ticker').style.display = 'flex';
+                    document.getElementById('news-text').innerText = data.live_news.headline + " (Source: " + data.live_news.source_used + ")";
                 }
 
-                // Remplissage UI
-                document.getElementById('match-title').innerText = data.match_title || input;
-                document.getElementById('ctx-absences').innerText = data.context?.absences || "Rien à signaler";
-                document.getElementById('ctx-xg').innerText = data.context?.xg_data || "-";
-                document.getElementById('ctx-form').innerText = data.context?.form || "-";
+                // Onglets
+                document.getElementById('analysis-text').innerText = data.tabs.analysis.summary;
+                const ul = document.getElementById('key-factors');
+                ul.innerHTML = "";
+                data.tabs.analysis.key_factors.forEach(f => ul.innerHTML += `<li>${f}</li>`);
 
-                // Boucle sur les pronos
-                const list = document.getElementById('predictions-list');
-                list.innerHTML = "";
-                
-                const preds = data.predictions || [];
-                preds.forEach(p => {
-                    let color = '#ef4444'; // Rouge
-                    if(p.trust >= 5) color = '#eab308'; // Jaune
-                    if(p.trust >= 8) color = '#22c55e'; // Vert
+                document.getElementById('xg-val').innerText = data.tabs.stats.xg_comparison;
+                document.getElementById('style-val').innerText = data.tabs.stats.possession_style;
+                document.getElementById('def-val').innerText = data.tabs.stats.defense_strength;
 
-                    list.innerHTML += `
-                        <div class="card">
-                            <div class="prono-header">
-                                <span class="prono-title">${p.market}</span>
-                                <span class="trust-badge" style="background:${color}">${p.trust}/10</span>
-                            </div>
-                            <div style="font-size:1.2rem; font-weight:800; margin-bottom:5px;">${p.selection}</div>
-                            <div class="progress-container">
-                                <div class="progress-bar" style="width:${p.trust * 10}%; background:${color}"></div>
-                            </div>
-                            <div class="analysis-text">💡 ${p.analysis}</div>
+                document.getElementById('h2h-last').innerText = data.tabs.h2h.last_meetings;
+                document.getElementById('h2h-trend').innerText = data.tabs.h2h.trend;
+
+                // Side bets
+                const sbDiv = document.getElementById('side-bets');
+                sbDiv.innerHTML = "";
+                data.side_bets.forEach(b => {
+                    sbDiv.innerHTML += `
+                        <div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #2d3748;">
+                            <span>${b.market}</span>
+                            <span style="font-weight:bold; color:white;">${b.selection}</span>
                         </div>
                     `;
                 });
-
-                // Banker
-                const banker = data.banker || {};
-                document.getElementById('banker-sel').innerText = banker.selection || "N/A";
-                document.getElementById('banker-odds').innerText = banker.odds || "-";
-                document.getElementById('banker-reason').innerText = banker.reason || "";
 
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('result-area').style.display = 'block';
 
             } catch (e) {
                 document.getElementById('loader').style.display = 'none';
-                const errDiv = document.getElementById('error-msg');
-                errDiv.style.display = 'block';
-                errDiv.innerText = "⚠️ Oups : " + e.message;
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerText = "Erreur : " + e.message;
             }
         }
     </script>
@@ -287,8 +302,7 @@ def home():
 @app.route('/analyze', methods=['POST'])
 def analyze_endpoint():
     data = request.json
-    # Renvoie directement le JSON stringifié
-    return jsonify({"analysis": get_ai_prediction(data.get('match', ''))})
+    return jsonify({"analysis": get_nerdytips_analysis(data.get('match', ''))})
 
 if __name__ == '__main__':
     app.run(debug=True)
